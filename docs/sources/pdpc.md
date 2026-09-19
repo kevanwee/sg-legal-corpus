@@ -1,64 +1,112 @@
-# Source: PDPC enforcement decisions
+﻿# Source: PDPC enforcement decisions
 
-**Authority:** PDPC · **Corpus:** `pdpc` · **Adapter:** `pdpc` · **Status:** stub
+**Authority:** PDPC · **Corpus:** `pdpc` · **Adapter:** `pdpc` · **Status:** implemented; Phase 4 gate not met
 **Prototype:** [pdpcscraper](https://github.com/kevanwee/pdpcscraper)
 
-The best-engineered of the four prototypes. This adapter is mostly a port rather than a rewrite: the retry logic, the PDF citation extraction and the penalty regexes are sound and carry over close to as-is.
+## Live verification, 19–20 September 2026
 
-## Endpoints
-
-```
-GET  https://www.pdpc.gov.sg/all-commissions-decisions          (SPA shell)
-XHR  .../getenforcementcase?...                                  (JSON, intercepted)
-GET  https://www.pdpc.gov.sg/{decision-slug}                     (detail page)
-GET  https://www.pdpc.gov.sg/.../*.pdf                           (grounds of decision)
-```
-
-The listing is JavaScript-rendered, so discovery needs a browser (`browser` extra). The prototype's approach — drive Playwright but intercept the underlying `getenforcementcase` JSON responses and prefer those over the scraped DOM — is the right one and is kept.
-
-**Worth attempting first:** call `getenforcementcase` directly with the parameters observed during interception. If it responds without a browser session, the `browser` dependency disappears from this adapter entirely. The prototype never tests this.
-
-## Work units
-
-One per listing page for discovery; one per decision for detail + PDF. Checkpointed per decision.
-
-## Record mapping
+The prototype endpoint and selectors are obsolete. The old listing redirects to
+`/organisations/regulations-decisions/enforcement-decisions`. Its Next.js bundle
+calls the following public endpoint, which answers without cookies, a browser
+session or a browser User-Agent:
 
 ```
-urn:sg:pdpc:2024_SGPDPC_3        the decision
-urn:sg:pdpc:x-{slug}             provisional, where the PDF is a scan
+GET https://www.pdpc.gov.sg/api/listing-api
+    ?listingtype=enforcement_decisions
+    &itemsperpage=100
+    &pathname=/organisations/regulations-decisions/enforcement-decisions
+    &type=Commission%27s+Decisions&page=1&sort=oldest
 ```
 
-## What carries over unchanged
+`type=Voluntary+Undertakings` selects undertakings on the same endpoint.
+The response has `totalItems`, `data` and `listingIntro`. Rows carry `id`,
+`title`, `href`, `date` and `topic`. Read the href; do not invent a detail URL.
 
-- `safe_get` with exponential backoff and explicit 429 handling.
-- `CITATION_RE` — `\[\d{4}\]\s+SGPDPCS?\s+\d+(?:\s*\(NFA\))?` — covers the `SGPDPC`, `SGPDPCS` and `(NFA)` variants correctly.
-- Citation extraction from the first three PDF pages, with a page-text fallback.
-- Context-aware penalty extraction (`financial penalty of $X`) before any bare dollar-amount fallback.
-- `normalise_case_name` turning "Breach of the Protection Obligation by Acme Pte Ltd" into "Re Acme Pte Ltd".
+Measured discovery: **269/269 unique decisions** over pages of 100, 100 and 69;
+**118/118 unique undertakings** over pages of 100 and 18. The API accepts
+`itemsperpage=100`; no Playwright dependency is needed. The old candidate
+`/api/PDPC/General/GetEnforcementCase` returned 404. No observed current bundle
+references `getenforcementcase`.
 
-## Changes required
+**Original obligation gate unavailable:** the current UI offers type/year,
+not obligation filters. API queries with `topic=Protection`, `topic=Accuracy`,
+and a deliberately nonexistent topic each return **269** decisions. These
+are ignored filters, not measured obligation-specific denominators. Do not
+claim the per-obligation gate has passed. All listed decisions are selected;
+obligations are read from source tags, falling back to the title with the
+basis recorded. Historical “Openness” maps to Accountability. Unlabelled
+obligations and sector remain unknown; there is no invented classification.
 
-**1. All nine obligations, not just Protection.** The prototype ticks the Protection checkbox and filters client-side on `"protection" in nature`. Correct for a focused analysis, wrong for a corpus. Remove the filter at ingest; keep it as a query parameter on `pdpc_decisions`.
+## Detail and PDF transport
 
-**2. Numeric penalties.** `penalty_sgd` is an integer. `"$25,000"` is kept separately as `penalty_stated`. Every downstream consumer currently re-parses the string.
+Detail HTML renders an empty `.rte`, but carries the rich text in Next hydration
+records. Long content uses `$<id>` references and length-prefixed UTF-8 text
+frames spanning script tags. The parser resolves these offline and checks byte
+lengths. PDF links now use `/assets/<uuid>` without a `.pdf` extension. Fetch
+verifies the PDF magic bytes. The first, middle and latest sampled decision
+pages and their asset links were verified live.
 
-**3. Distinguish zero from unknown.** The prototype returns `"None"`, `""` or `"$X"` from one function, conflating "no penalty imposed" with "could not determine". Split into `penalty_sgd` (`0` / number / `null`) plus `no_penalty_reason`.
+Some undertaking hrefs supplied by the API return 404, including HSBC Bank
+(Singapore) Limited and Cantley Lifecare. They are recorded as fetch failures,
+left pending, and never checkpointed as successful. Bud Studio's undertaking
+is reachable and its complete text is in hydration data.
 
-**4. Full decision text.** The prototype keeps only the first paragraph over 80 characters from the `.rte` block as a summary. Extract the full grounds from the PDF.
+## Work units and offline derivation
 
-**5. OCR fallback.** Roughly 25% of decisions are scanned images with no machine-readable text, so they lose their citation entirely and fall back to a provisional URN. An OCR pass recovers most of them.
+A discovery unit per collection/day fetches raw listing pages. `plan()` then
+reads the persisted snapshots and emits one unit per decision, filtered by
+published date. This also works when discovery was checkpointed by a previous
+process. Listing counts and unique IDs must reconcile before planning details.
+The ingest driver supplies its snapshot directory through the existing
+`configure()` hook. Failed detail units stay pending while other units proceed.
 
-**6. Commission undertakings.** A separate listing the prototype does not touch. Same record shape, `decision_types: ["Undertaking"]`.
+A decision unit stores its raw HTML and PDFs together. PDF snapshot parameters
+carry the original detail HTML, its SHA-256 and the listing row so `parse()`
+needs only that snapshot. Full grounds text, paragraph/page boundaries and
+provenance are retained. Undertakings without PDFs use their full rich text.
+No summary is presented as full grounds for a decision with no PDF.
 
-**7. Sector classification.** Present in the source metadata, not captured. Valuable for the "what is the going rate for this kind of breach" query.
+Citation extraction searches the first three pages, supports SGPDPC, SGPDPCS
+and NFA, and normalises OCR spacing. Missing citations retain a provisional
+slug URN. **A missing citation is not proof of a scan:** Henry Park Primary
+School Parents' Association has readable PDF text without a neutral citation.
 
-**8. JSONL, not Excel.** The analysis outputs (`pdpc_analysis.xlsx`, `pdpc_trends.png`) stay useful and move to a separate analytics step reading Parquet — they are a consumer of the corpus, not part of it.
+Financial penalties come from explicit penalty phrases in the case summary,
+not a bare dollar amount or a cited comparator in the grounds. Multiple
+amounts in one explicit penalty phrase are totalled across respondents.
+`0` has a reason; `null` remains unknown. The source summary is retained for
+checking the extraction.
 
-## Coverage denominator
+## Optional local OCR
 
-The listing's own total per obligation filter. Citation coverage is tracked separately, since a decision with a provisional URN is ingested but not fully identified.
+```
+pip install -e ".[pdf,ocr]"
+python scripts/fetch_pdpc_ocr_models.py
+```
 
-## Rate limit and posture
+The separate setup command downloads and checksum-verifies the model files
+from RapidOCR's manifest into ignored `data/ocr-models/`. Set
+`SGCORPUS_OCR_MODELS` if moved. Parsing supplies explicit local model paths,
+never invokes model downloads, and fails loudly if an image-bearing page needs
+OCR but dependencies/models are absent. OCR runs on low-text image pages;
+original PDF snapshots always remain available. Native text is preserved.
 
-1 request / 1.5s including PDF downloads. The most permissive of the four for metadata redistribution — respondent, obligations, decision type, penalty, date and citation are factual, and the prototype already publishes that shape. Full grounds text stays local.
+Measured local OCR smoke test: rasterising the live MCST 4869 cover to an
+image-only PDF recovered **1/1 page**, including **[2026] SGPDPC 1**. This is
+an OCR capability check, not a population citation-coverage measurement.
+
+## Fixtures and gate
+
+`pdpc_detail.html` contains only the live MCST article hydration record;
+`pdpc_cover.pdf` contains only its first page; `pdpc_listing.json` is a one-row
+listing fixture. Full source payloads stay in ignored `data/`.
+
+Phase 4 remains open. Population ingestion and citation measurements are
+recorded below when available; ignored obligation filters cannot satisfy the
+original roadmap gate.
+
+## Rate and posture
+
+One request per 1.5 seconds, including PDF downloads; robots.txt allows `/`.
+Honest project User-Agent. Full text stays local; only deliberate small test
+fixtures are committed.

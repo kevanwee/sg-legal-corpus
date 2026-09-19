@@ -29,15 +29,14 @@ def run(
     options: dict[str, object] | None = None,
 ) -> dict[str, int]:
     adapter = registry.get(adapter_name)
-    if options:
-        adapter.configure(**options)
+    adapter.configure(snapshot_root=paths.snapshots, **(options or {}))
     paths.ensure()
 
     policy = POLICIES[adapter_name].merge(min_interval)
     store = SnapshotStore(paths.snapshots)
     checkpoint = Checkpoint(paths.checkpoints / f"{adapter_name}.jsonl")
 
-    fetched = skipped = empty = 0
+    fetched = skipped = empty = failures = 0
 
     with Client(policy) as client:
         for unit in adapter.plan(since, until):
@@ -56,6 +55,10 @@ def run(
             except RateLimitExceeded as exc:
                 log.error("%s", exc)
                 break
+            except Exception as exc:
+                failures += 1
+                log.error("fetch failed for %s (left pending): %s", unit.key, exc)
+                continue
 
             if not snapshots:
                 # Cache the negative result. Without this, a non-sitting day and
@@ -78,6 +81,7 @@ def run(
 
     return {
         "fetched": fetched,
+        "failures": failures,
         "skipped": skipped,
         "empty": empty,
         "requests": client.request_count,

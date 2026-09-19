@@ -37,6 +37,7 @@ dependencies = [
 browser = ["playwright>=1.44"]
 analytics = ["pandas>=2.2", "pyarrow>=16.0"]
 pdf = ["pypdf>=4.2"]
+ocr = ["pypdfium2>=4.30", "rapidocr>=3.9,<4", "onnxruntime>=1.20", "numpy<2.5"]
 mcp = ["mcp>=1.2"]
 embeddings = ["sentence-transformers>=3.0", "numpy>=1.26"]
 dev = [
