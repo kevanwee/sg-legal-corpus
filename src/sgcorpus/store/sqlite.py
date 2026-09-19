@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS corpus_meta (
     last_fetch      TEXT,
     coverage_pct    REAL,
     adapter_version TEXT,
-    parser_rev      INTEGER
+    parser_rev      INTEGER,
+    quality         TEXT          -- JSON: per-corpus quality metrics
 );
 """
 
@@ -142,6 +143,71 @@ def rebuild_fts(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def measure_quality(conn: sqlite3.Connection, corpus: str) -> dict[str, Any]:
+    """Per-corpus quality metrics, stored so a regression is visible.
+
+    An adapter that silently starts under-collecting looks identical to a
+    quiet source unless something is counting.
+    """
+    quality: dict[str, Any] = {}
+
+    if corpus == "hansard":
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, "
+            "  SUM(CASE WHEN json_extract(meta,'$.speaker') IS NOT NULL THEN 1 ELSE 0 END) AS named "
+            "FROM documents "
+            "WHERE corpus = 'hansard' AND json_extract(meta,'$.level') = 'speech'"
+        ).fetchone()
+        if row and row["n"]:
+            quality["speeches"] = row["n"]
+            quality["attributed"] = row["named"]
+            quality["attribution_pct"] = round(100.0 * row["named"] / row["n"], 2)
+        sittings = conn.execute(
+            "SELECT COUNT(*) AS n FROM documents "
+            "WHERE corpus='hansard' AND json_extract(meta,'$.level')='sitting'"
+        ).fetchone()
+        quality["sittings"] = sittings["n"] if sittings else 0
+        vern = conn.execute(
+            "SELECT COUNT(*) AS n FROM documents "
+            "WHERE corpus='hansard' AND json_extract(meta,'$.level')='vernacular'"
+        ).fetchone()
+        quality["vernacular_speeches"] = vern["n"] if vern else 0
+
+    if corpus == "judgment":
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, "
+            "  SUM(CASE WHEN LENGTH(text) > 0 THEN 1 ELSE 0 END) AS with_text "
+            "FROM documents "
+            "WHERE corpus='judgment' AND json_extract(meta,'$.level')='judgment'"
+        ).fetchone()
+        if row and row["n"]:
+            quality["judgments"] = row["n"]
+            quality["full_text_pct"] = round(100.0 * (row["with_text"] or 0) / row["n"], 2)
+
+    if corpus == "pdpc":
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, "
+            "  SUM(CASE WHEN json_extract(meta,'$.citation_provisional') = 0 THEN 1 ELSE 0 END) AS cited "
+            "FROM documents WHERE corpus='pdpc'"
+        ).fetchone()
+        if row and row["n"]:
+            quality["decisions"] = row["n"]
+            quality["citation_pct"] = round(100.0 * (row["cited"] or 0) / row["n"], 2)
+
+    if corpus in ("act", "sl"):
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, "
+            "  SUM(CASE WHEN in_force_from IS NOT NULL THEN 1 ELSE 0 END) AS dated "
+            "FROM documents WHERE corpus = ?",
+            (corpus,),
+        ).fetchone()
+        if row and row["n"]:
+            quality["provisions"] = row["n"]
+            quality["commencement_pct"] = round(100.0 * (row["dated"] or 0) / row["n"], 2)
+
+    return quality
+
+
 def refresh_corpus_meta(
     conn: sqlite3.Connection,
     *,
@@ -154,11 +220,15 @@ def refresh_corpus_meta(
     ).fetchall()
     for row in rows:
         version, rev = (adapter_versions or {}).get(row["corpus"], (None, None))
+        quality = measure_quality(conn, row["corpus"])
         conn.execute(
             "INSERT OR REPLACE INTO corpus_meta "
             "(corpus, document_count, earliest, latest, last_fetch, coverage_pct, "
-            " adapter_version, parser_rev) VALUES (?,?,?,?,?,?,?,?)",
-            (row["corpus"], row["n"], row["earliest"], row["latest"], now, None, version, rev),
+            " adapter_version, parser_rev, quality) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                row["corpus"], row["n"], row["earliest"], row["latest"], now, None,
+                version, rev, json.dumps(quality),
+            ),
         )
     conn.commit()
 

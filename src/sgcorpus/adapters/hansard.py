@@ -13,6 +13,9 @@ keeps roughly 5% of the debate and discards the rest silently.
 from __future__ import annotations
 
 import html
+import io
+import json
+import logging
 import re
 import unicodedata
 from collections.abc import Iterator
@@ -31,7 +34,14 @@ from .base import WorkUnit
 # It was a GET with ?sittingDate= when the prototype was written; the old form
 # now answers HTTP 500 for every date, sitting or not.
 API_URL = "https://sprs.parl.gov.sg/search/getHansardReport"
+
+# Vernacular speeches are delivered as PDFs, not inline in the report JSON.
+# The report lists them with an id; this endpoint returns the file.
+FILE_URL = "https://sprs.parl.gov.sg/search/officialReport/getFile"
+
 SOURCE_DATE_FORMAT = "%d-%m-%Y"
+
+log = logging.getLogger(__name__)
 
 # Attribution appears in two shapes, and they are inverses of each other:
 #   "Dr Wan Rizal (Jalan Besar)"                  -> name, then seat
@@ -61,6 +71,26 @@ ASKED_RE = re.compile(
 )
 
 QUESTION_NO_RE = re.compile(r"\bQuestion\s+No\.?\s*(\d+)\b", re.IGNORECASE)
+
+# "Vernacular Speech by Ms Rahayu Mahzam" -> the speaker.
+VERNACULAR_BY_RE = re.compile(r"\bby\s+(?P<name>.+?)\s*$", re.IGNORECASE)
+
+TAMIL_RE = re.compile(r"[஀-௿]")
+CJK_RE = re.compile(r"[一-鿿]")
+
+
+def detect_language(text: str) -> str:
+    """Identify a vernacular speech's language by script.
+
+    SPRS labels every one of them only as "Vernacular Speech by X", so the
+    script is the only signal available. Malay is the residual because it is
+    written in Latin script and so cannot be positively identified this way.
+    """
+    if TAMIL_RE.search(text):
+        return "ta"
+    if CJK_RE.search(text):
+        return "zh"
+    return "ms"
 
 # sectionType, as the source labels it.
 SECTION_TYPES = {
@@ -217,9 +247,16 @@ class HansardAdapter:
     name = "hansard"
     corpus = Corpus.HANSARD
     authority = Authority.PARL
-    adapter_version = "1.0.0"
-    parser_rev = 1
+    adapter_version = "1.1.0"
+    parser_rev = 2
     spec_doc = "docs/sources/hansard.md"
+
+    def __init__(self, *, vernacular: bool = False) -> None:
+        self.vernacular = vernacular
+
+    def configure(self, **options: Any) -> None:
+        if "vernacular" in options:
+            self.vernacular = bool(options["vernacular"])
 
     # -- plan --------------------------------------------------------------
 
@@ -263,9 +300,46 @@ class HansardAdapter:
 
         yield str(response.url), body, response.status_code, params
 
+        if not self.vernacular:
+            return
+
+        # Vernacular speeches are separate PDFs. They are fetched under the
+        # same work unit so the sitting is only checkpointed once all of its
+        # material is on disk.
+        try:
+            listed = json.loads(body).get("vernacularList") or []
+        except ValueError:
+            return
+
+        for item in listed:
+            vid = item.get("vernacularID")
+            if vid is None:
+                continue
+            pdf = client.post_json(
+                FILE_URL, {"id": vid, "type": "vernacular"}, accept_status=(200,)
+            )
+            if pdf is None or pdf.status_code != 200 or pdf.content[:4] != b"%PDF":
+                continue
+            yield (
+                str(pdf.url),
+                pdf.content,
+                pdf.status_code,
+                {
+                    "kind": "vernacular",
+                    "sittingDate": params["sittingDate"],
+                    "vernacularID": vid,
+                    "vernacularTitle": item.get("vernacularTitle", ""),
+                    "fileName": item.get("fileName", ""),
+                },
+            )
+
     # -- parse -------------------------------------------------------------
 
     def parse(self, snapshot: Snapshot) -> Iterator[Document]:
+        if snapshot.params.get("kind") == "vernacular":
+            yield from self._parse_vernacular(snapshot)
+            return
+
         payload = snapshot.json()
         if not isinstance(payload, dict):
             return
@@ -405,3 +479,66 @@ class HansardAdapter:
             provenance=provenance,
         )
         yield from children
+
+    # -- vernacular --------------------------------------------------------
+
+    def _parse_vernacular(self, snapshot: Snapshot) -> Iterator[Document]:
+        """A vernacular speech PDF.
+
+        The prototype records only that non-English sections existed
+        (``VernacularDocCount``) and drops the text. These are ministerial
+        statements and speeches delivered in Malay, Mandarin and Tamil -- part
+        of the record, and the only version of what was actually said.
+        """
+        try:
+            from pypdf import PdfReader
+        except ImportError:  # pragma: no cover
+            log.warning("vernacular snapshots need the `pdf` extra; skipping")
+            return
+
+        params = snapshot.params
+        try:
+            sitting = datetime.strptime(params["sittingDate"], SOURCE_DATE_FORMAT).date()
+        except (KeyError, ValueError):
+            return
+
+        try:
+            reader = PdfReader(io.BytesIO(snapshot.body))
+            text = _clean("\n".join((page.extract_text() or "") for page in reader.pages))
+        except Exception as exc:
+            log.error("vernacular PDF %s unreadable: %s", params.get("vernacularID"), exc)
+            return
+
+        if not text:
+            return
+
+        title = _clean(params.get("vernacularTitle")) or "Vernacular speech"
+        speaker_match = VERNACULAR_BY_RE.search(title)
+
+        vid = params["vernacularID"]
+        yield Document(
+            urn=str(urnlib.hansard_sitting(sitting).child(f"v{vid}")),
+            corpus=self.corpus,
+            authority=self.authority,
+            title=title,
+            citation=urnlib.to_citation(urnlib.hansard_sitting(sitting)),
+            dates=Dates(issued=sitting),
+            language=detect_language(text),  # type: ignore[arg-type]
+            text=text,
+            parent=str(urnlib.hansard_sitting(sitting)),
+            meta={
+                "level": "vernacular",
+                "vernacular_id": vid,
+                "file_name": params.get("fileName"),
+                "speaker": _clean(speaker_match.group("name")) if speaker_match else None,
+                "pages": len(reader.pages),
+            },
+            provenance=Provenance(
+                source_url=snapshot.url,
+                retrieved_at=snapshot.retrieved_at or datetime.now(UTC),
+                snapshot_sha256=snapshot.sha256,
+                adapter=self.name,
+                adapter_version=self.adapter_version,
+                parser_rev=self.parser_rev,
+            ),
+        )

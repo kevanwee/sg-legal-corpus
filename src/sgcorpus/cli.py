@@ -6,6 +6,7 @@ reproducible with a shell command, without an agent in the loop.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date
 from typing import Annotated
@@ -64,6 +65,13 @@ def fetch(
         float | None,
         typer.Option(help="Slow the request rate. Cannot be used to speed it up."),
     ] = None,
+    vernacular: Annotated[
+        bool,
+        typer.Option(
+            help="hansard: also fetch Malay/Mandarin/Tamil speech PDFs. "
+            "Roughly 8 extra requests per sitting."
+        ),
+    ] = False,
     verbose: bool = False,
 ) -> None:
     """Fetch raw snapshots. The only command that touches the network."""
@@ -75,6 +83,7 @@ def fetch(
         until=date.fromisoformat(end) if end else None,
         limit=limit,
         min_interval=min_interval,
+        options={"vernacular": vernacular} if vernacular else None,
     )
     console.print(result)
 
@@ -137,8 +146,9 @@ def stats() -> None:
     rows = sqlite.stats(conn)
     conn.close()
 
-    table = Table("corpus", "documents", "earliest", "latest", "adapter", "parser_rev")
+    table = Table("corpus", "documents", "earliest", "latest", "adapter", "rev", "quality")
     for row in rows:
+        quality = json.loads(row["quality"] or "{}")
         table.add_row(
             row["corpus"],
             str(row["document_count"]),
@@ -146,6 +156,7 @@ def stats() -> None:
             row["latest"] or "",
             row["adapter_version"] or "",
             str(row["parser_rev"] or ""),
+            "  ".join(f"{k}={v}" for k, v in quality.items()) or "-",
         )
     console.print(table)
 

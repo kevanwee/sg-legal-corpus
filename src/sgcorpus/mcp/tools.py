@@ -198,7 +198,12 @@ def handle(conn: sqlite3.Connection, name: str, args: dict[str, Any]) -> dict[st
         return document
 
     if name == "corpus_stats":
-        return {"corpora": store.stats(conn)}
+        corpora = []
+        for row in store.stats(conn):
+            row = dict(row)
+            row["quality"] = json.loads(row.pop("quality", None) or "{}")
+            corpora.append(row)
+        return {"corpora": corpora}
 
     if name in ("get_provision", "list_amendments"):
         return _unavailable(name, PHASE_3)

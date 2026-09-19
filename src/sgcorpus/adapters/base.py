@@ -52,11 +52,25 @@ class SourceAdapter(Protocol):
         ...
 
     def fetch(self, unit: WorkUnit, client: Client) -> Iterator[tuple[str, bytes, int, dict[str, Any]]]:
-        """Yield (url, body, status, params) tuples. No parsing, no interpretation."""
+        """Yield (url, body, status, params) tuples. No parsing, no interpretation.
+
+        One unit may yield several snapshots -- a listing plus the documents it
+        points at, say. They are checkpointed together, so the unit is only
+        marked done once all of its snapshots are on disk.
+        """
         ...
 
     def parse(self, snapshot: Snapshot) -> Iterator[Document]:
-        """Snapshot bytes to Documents. Pure, offline, deterministic."""
+        """Snapshot bytes to Documents. Pure, offline, deterministic.
+
+        Where an adapter stores more than one kind of snapshot, ``params``
+        carries the discriminator; parse dispatches on it rather than sniffing
+        the bytes.
+        """
+        ...
+
+    def configure(self, **options: Any) -> None:
+        """Apply run-time options from the CLI. Optional; default is a no-op."""
         ...
 
 
@@ -89,3 +103,6 @@ class NotImplementedAdapter:
 
     def parse(self, snapshot: Snapshot) -> Iterator[Document]:
         yield from self._unbuilt()
+
+    def configure(self, **options: Any) -> None:
+        return None

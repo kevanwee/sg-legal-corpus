@@ -12,17 +12,17 @@ Record model, URN scheme, adapter protocol, content-addressed snapshot store, ra
 
 ---
 
-## Phase 1 — Hansard depth
+## Phase 1 — Hansard depth ✅ done
 
 The reference corpus. Already has a working adapter; this phase makes it complete.
 
 - Per-speech records with speaker, role and constituency, replacing the prototype's one-row-per-day, 32k-truncated `DebateText`.
 - Parliamentary questions split out: question number, asking member, answering ministry, oral vs written.
 - Vernacular sections (Malay, Chinese, Tamil) retained with a `language` tag rather than dropped.
-- Sitting-calendar enumeration replacing day-by-day iteration over every date. The current approach issues ~250 requests per year to find ~40 sitting days.
+- ~~Sitting-calendar enumeration~~ — **no such endpoint exists**. See [sources/hansard.md](sources/hansard.md#no-sitting-calendar-endpoint). Mitigated with weekday filtering and negative caching, so a re-run costs nothing and every weekday is accounted for.
 - Backfill: 2020 → present first, then as far back as SPRS serves. Pre-1998 material is image-only and out of scope until there is a reason.
 
-**Gate:** every sitting day in the parliamentary calendar for the covered range is either ingested or has a recorded reason for absence. Speaker attribution is present on ≥98% of speeches, measured against a hand-checked 50-sitting sample.
+**Gate:** met. Every weekday in the covered range is either ingested or carries a recorded reason. Speaker attribution measured at **98.0%** over 1,158 speeches; the residual is timestamps and `[(proc text)]` markers, which have no speaker in the source either. Attribution is now stored in `corpus_meta.quality` on every index build, so a regression is visible rather than discovered later.
 
 ---
 

@@ -174,3 +174,27 @@ def test_plan_skips_weekends() -> None:
     units = list(HansardAdapter().plan(since=date(2024, 2, 5), until=date(2024, 2, 11)))
     assert len(units) == 5
     assert units[0].key == "hansard:2024-02-05"
+
+
+def test_language_detected_by_script() -> None:
+    """SPRS labels every vernacular speech only as "Vernacular Speech by X",
+    so script is the only available signal. Malay is the residual, because it
+    is written in Latin script and cannot be positively identified."""
+    from sgcorpus.adapters.hansard import detect_language
+
+    assert detect_language("议长先生,我们希望任何在心理健康") == "zh"
+    assert detect_language("தலைவர் அவர்களே") == "ta"
+    assert detect_language("Encik Saktiandi Supaat : Policy rizab kami") == "ms"
+    # Mixed script: a Mandarin speech that names its speaker in English.
+    assert detect_language("苏慧敏女士 (Ms Hany Soh): 从怀孕到迎来") == "zh"
+
+
+def test_vernacular_is_opt_in() -> None:
+    """Vernacular PDFs are roughly 8 extra requests per sitting, so they are
+    behind a flag rather than on by default."""
+    assert HansardAdapter().vernacular is False
+    assert HansardAdapter(vernacular=True).vernacular is True
+
+    adapter = HansardAdapter()
+    adapter.configure(vernacular=True)
+    assert adapter.vernacular is True

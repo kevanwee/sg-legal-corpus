@@ -46,6 +46,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "jsonschema>=4.22",
+    "pypdf>=4.2",
 ]
 all = ["sgcorpus[browser,analytics,pdf,mcp]"]
 

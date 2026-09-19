@@ -118,22 +118,44 @@ Speaker, role and constituency are parsed from the speaker markup in `content`. 
 
 **5. Vernacular material counted, not kept.** `VernacularDocCount` records that non-English sections existed; the text is dropped.
 
+## Vernacular speeches
+
+Speeches delivered in Malay, Mandarin and Tamil are **not inline in the report JSON**. `vernacularList` carries only metadata; the text lives in a separate PDF per speech:
+
+```
+POST https://sprs.parl.gov.sg/search/officialReport/getFile
+{"id": <vernacularID>, "type": "vernacular"}
+```
+
+`/vernacular/download` and `/officialReport/download` both exist in the front-end bundle and both reject the payloads the bundle appears to send; `officialReport/getFile` is the one that works.
+
+The listing gives no language, only "Vernacular Speech by X", so language is detected by script: Tamil block, then CJK, with Malay as the residual because it is Latin script and cannot be positively identified. On three sitting days this yielded 11 Mandarin and 12 Malay speeches, all with the speaker recoverable from the title.
+
+Fetching them costs roughly 8 extra requests per sitting, so it is behind `--vernacular` rather than on by default. Without the flag the sitting record still carries the count, so nothing is silently lost either way.
+
+## No sitting-calendar endpoint
+
+There is no public endpoint that lists sitting dates. The front-end bundle exposes `/searchResult`, `/searchByMp`, `/getHansardTopic`, `/getToken` and `/getMpNameByMpId`; `dateList` in the bundle is a day-of-month dropdown, not a calendar. `/searchResult` takes a JSON body whose shape is assembled across localStorage in minified code and rejects every payload reconstructed so far.
+
+The mitigation is weekday filtering plus negative caching: a non-sitting date is recorded in the checkpoint with a reason, so a re-run costs nothing and `corpus_stats` can still account for every weekday in the range. Cost is about 250 requests per year at 0.5s, roughly two minutes per year of backfill.
+
 ## Coverage denominator
 
 Sitting days in the parliamentary calendar for the covered range. `corpus_stats` reports ingested / expected, and an absent sitting day carries a recorded reason.
 
 ## Measured baseline
 
-Three sitting days (5-7 February 2024), adapter 1.0.0 / parser_rev 1:
+Three sitting days (5-7 February 2024), adapter 1.1.0 / parser_rev 2, `--vernacular`:
 
 | Metric | Value |
 |---|---|
 | Sitting days found | 3 of 5 weekdays probed |
-| Documents | 1,419 (3 sittings, 258 sections, 1,158 speeches) |
+| Documents | 1,442 (3 sittings, 258 sections, 1,158 speeches, 23 vernacular) |
 | Speaker attribution | 98.0% |
 | Distinct speakers | 129 |
 | Question numbers captured | 339 |
-| Speech text | 1,647,854 characters |
+| Vernacular speeches | 23 (11 Mandarin, 12 Malay) |
+| Text | 1,701,099 characters |
 | Parse failures | 0 |
 
 The residual 2% is timestamps (`2.03 pm`) and `[(proc text) ...]` procedural markers, which have no speaker in the source either. They are retained with a null speaker rather than dropped: they are part of the record, and being explicit about what they are costs nothing.

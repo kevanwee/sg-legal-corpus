@@ -26,8 +26,11 @@ def run(
     until: date | None = None,
     limit: int | None = None,
     min_interval: float | None = None,
+    options: dict[str, object] | None = None,
 ) -> dict[str, int]:
     adapter = registry.get(adapter_name)
+    if options:
+        adapter.configure(**options)
     paths.ensure()
 
     policy = POLICIES[adapter_name].merge(min_interval)
