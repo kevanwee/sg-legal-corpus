@@ -1,0 +1,51 @@
+{
+  "_note": "Trimmed from a live SPRS response for 06-02-2024 (92 sections, ~640KB). Markup, field names and section types are reproduced exactly; the speeches are abridged.",
+  "metadata": {
+    "parlimentNO": 14,
+    "sessionNO": 2,
+    "volumeNO": 95,
+    "sittingNO": 121,
+    "sittingDate": "06-02-2024",
+    "partSessionStr": "SECOND SESSION",
+    "startTimeStr": "11:00 AM",
+    "speaker": "Mr Speaker",
+    "dateToDisplay": "Tuesday, 6 February 2024"
+  },
+  "takesSectionVOList": [
+    {
+      "startPgNo": 1,
+      "endPgNo": 4,
+      "title": "Advancing Mental Health",
+      "subTitle": null,
+      "sectionType": "OS",
+      "questionNo": null,
+      "content": "<h6>2.20 pm</h6><p><strong>Dr Wan Rizal (Jalan Besar)</strong>:&nbsp;Sir, I beg to move, \"That this House recognises the importance of mental health as a health, social and economic issue.\"</p><p>In our journey towards a healthier, more resilient Singapore, we must recognise mental health not just as a component of our healthcare system but as a cornerstone of societal well-being.</p><p><strong>The Minister for Manpower (Dr Tan See Leng)</strong>:&nbsp;Mr Speaker, Sir, the Government shares the sentiments expressed by the Member.</p><p><strong>Mr Speaker</strong>:&nbsp;Assoc Prof Jamus Jerome Lim.</p>"
+    },
+    {
+      "startPgNo": 5,
+      "endPgNo": 5,
+      "title": "Protection for Employees from Unfair Retrenchment Practices",
+      "subTitle": null,
+      "sectionType": "OA",
+      "questionNo": 6,
+      "content": "<p><strong>Mr Louis Ng Kok Kwang</strong> asked the Minister for Manpower whether the Ministry will consider mandating retrenchment benefits.</p><p><strong>The Minister for Manpower (Dr Tan See Leng)</strong>:&nbsp;Mr Speaker, Sir, the Ministry conducted 4,200 inspections in the preceding year.</p>"
+    },
+    {
+      "startPgNo": 6,
+      "endPgNo": 6,
+      "title": "Personal Data Protection (Amendment) Bill",
+      "subTitle": "Second Reading",
+      "sectionType": "BP",
+      "questionNo": null,
+      "content": "<div><p><strong>Mrs Josephine Teo (Minister for Communications and Information)</strong>:&nbsp;Mr Speaker, Sir, I beg to move, &quot;That the Bill be now read a Second time.&quot;</p><p>The amendments before the House strengthen the Protection Obligation and introduce mandatory breach notification. Organisations will be required to notify the Commission of a notifiable data breach as soon as is practicable.</p><p><strong>Mr Christopher de Souza (Holland-Bukit Timah GRC)</strong>:&nbsp;Sir, may I ask the Minister to clarify the threshold at which a breach becomes notifiable?</p></div>"
+    }
+  ],
+  "writtenAnswersVOList": [],
+  "attendanceList": [
+    { "mpName": "Mr Speaker", "attendance": true, "locationName": null },
+    { "mpName": "Mrs Josephine Teo (Jalan Besar).", "attendance": true, "locationName": null },
+    { "mpName": "Ms Foo Mee Har (West Coast).", "attendance": false, "locationName": null }
+  ],
+  "ptbaList": [],
+  "vernacularList": []
+}

@@ -1,0 +1,38 @@
+# The corpus never enters version control. See docs/legal-posture.md.
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.jsonl
+*.jsonl.gz
+*.xlsx
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Fixtures are the deliberate exception: small, redacted, committed on purpose.
+!tests/fixtures/*.json
+!tests/fixtures/*.jsonl

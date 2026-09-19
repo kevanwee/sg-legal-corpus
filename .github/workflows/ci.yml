@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Types
+        run: mypy src/sgcorpus
+        continue-on-error: true
+
+      - name: Test
+        # -m "not network" is the default; nothing in CI touches a live source.
+        run: pytest -m "not network" --cov=sgcorpus --cov-report=term-missing
+
+  schemas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install check-jsonschema
+      - name: Validate the JSON Schemas themselves
+        run: check-jsonschema --check-metaschema schemas/*.json
+
+  no-corpus-committed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse to ship scraped content
+        # docs/legal-posture.md: this repository distributes code, schemas and
+        # the pipeline -- never the corpus.
+        run: |
+          if git ls-files | grep -E '\.(jsonl|parquet|db|sqlite3?)$' | grep -v '^tests/fixtures/'; then
+            echo "::error::corpus data is committed; see docs/legal-posture.md"
+            exit 1
+          fi
+          echo "clean"

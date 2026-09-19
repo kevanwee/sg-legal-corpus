@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kevanwee/sg-legal-corpus/schemas/document.schema.json",
+  "title": "Document",
+  "description": "The canonical record shape for every document in every sg-legal-corpus corpus. See docs/corpus-spec.md.",
+  "type": "object",
+  "required": ["urn", "corpus", "authority", "title", "dates", "text", "provenance"],
+  "additionalProperties": false,
+  "properties": {
+    "urn": { "$ref": "#/$defs/urn" },
+    "corpus": {
+      "enum": ["act", "sl", "judgment", "pdpc", "hansard", "bill"]
+    },
+    "authority": {
+      "enum": ["AGC", "SUPCT", "STATECT", "FAMCT", "PDPC", "PARL"]
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "citation": { "type": ["string", "null"], "description": "Canonical display form." },
+    "dates": {
+      "type": "object",
+      "required": ["issued"],
+      "additionalProperties": false,
+      "properties": {
+        "issued": { "$ref": "#/$defs/date" },
+        "in_force_from": { "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] },
+        "in_force_to": { "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] }
+      }
+    },
+    "language": { "enum": ["en", "ms", "zh", "ta"], "default": "en" },
+    "text": {
+      "type": "string",
+      "description": "Complete plain text. Never truncated, for any reason, at any stage."
+    },
+    "parts": {
+      "type": "array",
+      "description": "Ordered child URNs. Children are separate records, not nested objects.",
+      "items": { "$ref": "#/$defs/urn" }
+    },
+    "parent": { "oneOf": [{ "$ref": "#/$defs/urn" }, { "type": "null" }] },
+    "meta": { "type": "object" },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "corpus": { "enum": ["act", "sl"] } } },
+      "then": {
+        "properties": {
+          "dates": { "required": ["issued", "in_force_from"] }
+        },
+        "description": "Legislation must carry commencement information; without it no as_of query can be answered."
+      }
+    }
+  ],
+  "$defs": {
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "urn": {
+      "type": "string",
+      "pattern": "^urn:sg:(act|sl|judgment|pdpc|hansard|bill):[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)*(@\\d{4}-\\d{2}-\\d{2})?$"
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source_url", "retrieved_at", "snapshot_sha256", "adapter", "adapter_version", "parser_rev"],
+      "additionalProperties": false,
+      "properties": {
+        "source_url": { "type": "string", "format": "uri" },
+        "retrieved_at": { "type": "string", "format": "date-time" },
+        "snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "adapter": { "type": "string" },
+        "adapter_version": { "type": "string" },
+        "parser_rev": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}
