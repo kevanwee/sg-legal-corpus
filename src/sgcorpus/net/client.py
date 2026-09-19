@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ..config import USER_AGENT, SourcePolicy
+from ..config import SourcePolicy
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class Client:
         self._http = httpx.Client(
             timeout=timeout,
             follow_redirects=True,
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "en-SG,en;q=0.9"},
+            headers={"User-Agent": policy.user_agent, "Accept-Language": "en-SG,en;q=0.9"},
         )
 
     # -- lifecycle ---------------------------------------------------------
@@ -87,6 +87,9 @@ class Client:
             self._robots = urllib.robotparser.RobotFileParser()
             robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
             try:
+                self._check_cap()
+                self._wait()
+                self._request_count += 1
                 response = self._http.get(robots_url, timeout=10.0)
                 self._robots.parse(response.text.splitlines())
             except httpx.HTTPError:
@@ -95,7 +98,10 @@ class Client:
                 # treat a network blip as a site-wide disallow either.
                 log.warning("could not fetch %s; proceeding at policy rate", robots_url)
                 self._robots.parse([])
-        if not self._robots.can_fetch(USER_AGENT, url):
+        delay = self._robots.crawl_delay(self.policy.user_agent)
+        if delay is not None:
+            self.policy = self.policy.merge(float(delay))
+        if not self._robots.can_fetch(self.policy.user_agent, url):
             raise RobotsDisallowed(url)
 
     # -- requests ----------------------------------------------------------

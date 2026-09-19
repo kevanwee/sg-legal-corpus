@@ -26,7 +26,15 @@ So:
 
 **Position.** Fetch at a low rate for local use. Do not redistribute provision text. The publishable derivative is the structural skeleton: short codes, provision numbers, headings, commencement dates, amendment relationships. A table of which section was amended by which Act on which date is a set of facts; the section text is not.
 
-**Rate limit.** 1 request / 2s, single connection.
+**Rate limit.** 1 request / 6s, single connection, including robots requests.
+
+**SSO access exception (owner authorised, 2026-09-19).** CloudFront rejects the
+project, curl and Python User-Agents while accepting a browser User-Agent.
+SSO's published robots.txt permits crawling except `/search`, with a six-second
+crawl-delay. The owner has authorised a per-source browser User-Agent on the
+basis that we honour that published policy: never request `/search`, never
+exceed one request per six seconds. This is an explicit exception to the
+project-identifying UA and bot-detection rule below, not a global UA change.
 
 ### eLitigation (Supreme Court / Judiciary)
 

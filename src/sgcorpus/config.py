@@ -17,7 +17,7 @@ USER_AGENT = (
     "research corpus builder; contact via repository issues"
 )
 """Identifies the project so an administrator who sees the traffic can find out
-what it is and contact the author. Never impersonates a browser."""
+what it is and contact the author. SSO has an explicitly documented override."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +27,7 @@ class SourcePolicy:
     host: str
     min_interval: float
     """Seconds between requests. Single connection; no concurrency, ever."""
+    user_agent: str = USER_AGENT
     daily_cap: int | None = None
     respect_robots: bool = True
     redistributable: bool = False
@@ -41,7 +42,13 @@ class SourcePolicy:
 
 
 POLICIES: dict[str, SourcePolicy] = {
-    "sso": SourcePolicy("sso.agc.gov.sg", min_interval=2.0),
+    # SSO permits crawling at 6s but rejects non-browser UAs at CloudFront.
+    # Owner-authorised exception; see docs/legal-posture.md.
+    "sso": SourcePolicy(
+        "sso.agc.gov.sg", min_interval=6.0,
+        user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+    ),
     "elitigation": SourcePolicy(
         "www.elitigation.sg", min_interval=3.0, daily_cap=2000
     ),
