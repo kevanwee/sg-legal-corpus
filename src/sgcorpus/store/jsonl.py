@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import TextIO
 
 from ..models import Document, Ref
 
@@ -17,7 +18,7 @@ class JsonlWriter:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = None
+        self._fh: TextIO | None = None
         self.count = 0
 
     def __enter__(self) -> JsonlWriter:

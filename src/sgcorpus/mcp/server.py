@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import Any
 
 from ..config import default_paths
 from ..store import sqlite as store
@@ -40,7 +41,7 @@ def main() -> None:
     conn = store.connect(paths.db, read_only=True)
     server = Server("sg-legal-corpus")
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[untyped-decorator]
     async def list_tools() -> list[Tool]:
         return [
             Tool(
@@ -51,8 +52,8 @@ def main() -> None:
             for spec in tools.TOOL_SPECS
         ]
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    @server.call_tool()  # type: ignore[untyped-decorator]
+    async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = tools.handle(conn, name, arguments or {})
         return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
 

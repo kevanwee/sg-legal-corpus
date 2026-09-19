@@ -29,7 +29,6 @@ jobs:
 
       - name: Types
         run: mypy src/sgcorpus
-        continue-on-error: true
 
       - name: Test
         # -m "not network" is the default; nothing in CI touches a live source.

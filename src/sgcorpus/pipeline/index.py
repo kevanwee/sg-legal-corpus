@@ -7,6 +7,7 @@ file is what the MCP server opens.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from ..adapters import registry
 from ..config import Paths
@@ -18,7 +19,7 @@ log = logging.getLogger(__name__)
 BATCH = 2000
 
 
-def run(paths: Paths, *, adapters: list[str] | None = None) -> dict[str, int]:
+def run(paths: Paths, *, adapters: list[str] | None = None) -> dict[str, Any]:
     paths.ensure()
     names = adapters or list(registry.all_adapters())
 
