@@ -32,9 +32,13 @@ from .hansard import _clean
 BASE_URL = "https://www.pdpc.gov.sg"
 LISTING_PATH = "/organisations/regulations-decisions/enforcement-decisions"
 API_URL = BASE_URL + "/api/listing-api"
+SITEMAP_URL = BASE_URL + "/sitemap.xml"
 COLLECTIONS = ("Commission's Decisions", "Voluntary Undertakings")
 PAGE_SIZE = 100
-CITATION_RE = re.compile(r"\[(\d{4})\]\s*(SGPDPCS?)\s*(\d+)(\s*\(NFA\))?", re.I)
+CITATION_RE = re.compile(
+    r"(?:Decision Citation:\s*)?\[(\d{4})\]\s*(SGPDPC[SR]?)\s*\[?(\d+)\]?"
+    r"(\s*\(NFA\))?", re.I,
+)
 PENALTY_CONTEXT_RE = re.compile(
     r"(?:financial\s+penalt(?:y|ies)\s+of\s+|penalty\s+of\s+)"
     r"((?:S?\$[\d,]+(?:\.\d{2})?)(?:\s+and\s+S?\$[\d,]+(?:\.\d{2})?)*)", re.I,
@@ -198,7 +202,7 @@ class PdpcAdapter:
     corpus = Corpus.PDPC
     authority = Authority.PDPC
     adapter_version = "1.0.0"
-    parser_rev = 4
+    parser_rev = 7
     spec_doc = "docs/sources/pdpc.md"
 
     def __init__(self, *, snapshot_root: Path | None = None) -> None:
@@ -209,6 +213,13 @@ class PdpcAdapter:
             self.snapshot_root = Path(options["snapshot_root"])
 
     def plan(self, since: date | None = None, until: date | None = None) -> Iterator[WorkUnit]:
+        yield WorkUnit(f"pdpc:sitemap:{date.today()}", {"kind": "sitemap"})
+        maps = [s for s in SnapshotStore(self.snapshot_root).iter_snapshots(self.name)
+                if s.params.get("kind") == "sitemap"]
+        sitemap_urls = []
+        if maps:
+            latest = max(maps, key=lambda s: s.retrieved_at)
+            sitemap_urls = [el.get_text() for el in BeautifulSoup(latest.text(), "xml").find_all("loc")]
         for collection in COLLECTIONS:
             yield WorkUnit(f"pdpc:listing:{collection}:{date.today()}",
                            {"kind": "listing", "collection": collection})
@@ -234,9 +245,26 @@ class PdpcAdapter:
                 issued = datetime.strptime(item["date"], "%d %b %Y").date()
                 if (since and issued < since) or (until and issued > until):
                     continue
-                yield WorkUnit(f"pdpc:decision:{identifier}", {"kind": "detail", "item": item})
+                slug = item["href"].rstrip("/").rsplit("/", 1)[-1]
+                title_slug = re.sub(r"[^a-z0-9]+", "-", item["title"].lower()).strip("-")
+                # Every candidate URL comes verbatim from the published sitemap.
+                candidates = [url for url in sitemap_urls
+                              if url.rsplit("/", 1)[-1] == slug
+                              or url.rsplit("/", 1)[-1] == title_slug
+                              or url.rsplit("/", 1)[-1].startswith(title_slug + "-")]
+                yield WorkUnit(f"pdpc:decision:{identifier}",
+                               {"kind": "detail", "item": item, "sitemap_candidates": candidates})
 
     def fetch(self, unit: WorkUnit, client: Client) -> Iterator[tuple[str, bytes, int, dict[str, Any]]]:
+        if unit.payload["kind"] == "sitemap":
+            response = client.get(SITEMAP_URL)
+            if response is None:
+                raise RuntimeError("PDPC sitemap request exhausted retries")
+            response.raise_for_status()
+            if not BeautifulSoup(response.text, "xml").find("urlset"):
+                raise ValueError("PDPC sitemap is not a URL set")
+            yield str(response.url), response.content, 200, {"kind": "sitemap"}
+            return
         if unit.payload["kind"] == "listing":
             page = 1
             count = 0
@@ -263,6 +291,21 @@ class PdpcAdapter:
         response = client.get(url)
         if response is None:
             raise RuntimeError(f"PDPC detail request exhausted retries: {url}")
+        if response.status_code == 404:
+            for candidate in unit.payload.get("sitemap_candidates", []):
+                if candidate == url or urlparse(candidate).hostname != "www.pdpc.gov.sg":
+                    continue
+                alternate = client.get(candidate)
+                if alternate is None or alternate.status_code != 200:
+                    continue
+                candidate_page = BeautifulSoup(alternate.text, "lxml")
+                heading = candidate_page.select_one("h1")
+                published = candidate_page.select_one(".page-banner__date")
+                if (heading and published and _clean(heading.get_text()) == _clean(item["title"])
+                        and _clean(published.get_text()).removeprefix("Published on ") == item["date"]):
+                    response = alternate
+                    url = str(alternate.url)
+                    break
         response.raise_for_status()
         content = detail_content(response.text)
         if not content.strip():
@@ -288,7 +331,7 @@ class PdpcAdapter:
 
     def parse(self, snapshot: Snapshot) -> Iterator[Document]:
         kind = snapshot.params.get("kind")
-        if kind == "listing" or (kind == "detail" and snapshot.params.get("has_pdf")):
+        if kind in ("listing", "sitemap") or (kind == "detail" and snapshot.params.get("has_pdf")):
             return
         if kind not in ("pdf", "detail"):
             raise ValueError(f"Unknown PDPC snapshot kind: {kind}")
@@ -311,21 +354,31 @@ class PdpcAdapter:
             obligations.append("Accountability")
         text, ocr_pages = pdf_text(snapshot.body) if kind == "pdf" else (summary, [])
         # First citation on cover/front matter, never a citation in the summary's links.
-        found = CITATION_RE.search("\n".join(text.split("\f")[:3])) if kind == "pdf" else None
+        found = next((match for line in "\n".join(text.split("\f")[:3]).splitlines()
+                      if (match := CITATION_RE.fullmatch(line.strip()))), None) if kind == "pdf" else None
         citation = (f"[{found[1]}] {found[2].upper()} {found[3]}"
                     + (" (NFA)" if found[4] else "")) if found else None
         identifier = urnlib.from_neutral_citation(citation, corpus="pdpc") if citation else urnlib.provisional_pdpc(item["href"].rstrip("/").rsplit("/", 1)[-1])
+        canonical = str(identifier)
+        if kind == "pdf":
+            identifier = identifier.child("publication-" + snapshot.sha256)
         penalty, stated, reason = _penalty(title + "\n" + summary, types)
+        reconsideration = bool(citation and "SGPDPCR" in citation)
+        if reconsideration:
+            # The listing summary describes the original decision; do not
+            # attribute its penalty to a separate reconsideration attachment.
+            types = ["Reconsideration"]
+            penalty, stated, reason = None, None, None
         yield Document(
             urn=str(identifier), corpus=self.corpus, authority=self.authority,
             title=normalise_case_name(title), citation=citation,
             dates=Dates(issued=datetime.strptime(item["date"], "%d %b %Y").date()), text=text,
-            meta={"neutral_citation": citation, "citation_provisional": citation is None,
+            meta={"canonical_urn": canonical, "neutral_citation": citation, "citation_provisional": citation is None,
                   "respondent": normalise_case_name(title).removeprefix("Re "),
                   "obligations": obligations, "obligations_source": "tags" if any(o in tags for o in OBLIGATIONS) else "title",
                   "decision_types": types, "penalty_sgd": penalty, "penalty_stated": stated,
                   "no_penalty_reason": reason, "sector": None, "summary": summary,
-                  "source_id": item["id"], "source_tags": tags, "has_full_text": kind == "pdf" or types == ["Undertaking"],
+                  "source_id": item["id"], "issued_basis": "listing_publication_date", "source_tags": tags, "has_full_text": kind == "pdf" or types == ["Undertaking"],
                   "ocr_pages": ocr_pages, "detail_sha256": snapshot.params.get("detail_sha256"),
                   "detail_url": snapshot.params.get("detail_url", snapshot.url)},
             provenance=Provenance(source_url=snapshot.url, retrieved_at=snapshot.retrieved_at,

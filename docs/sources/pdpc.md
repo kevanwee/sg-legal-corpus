@@ -1,4 +1,4 @@
-﻿# Source: PDPC enforcement decisions
+# Source: PDPC enforcement decisions
 
 **Authority:** PDPC · **Corpus:** `pdpc` · **Adapter:** `pdpc` · **Status:** implemented; Phase 4 gate not met
 **Prototype:** [pdpcscraper](https://github.com/kevanwee/pdpcscraper)
@@ -110,3 +110,37 @@ original roadmap gate.
 One request per 1.5 seconds, including PDF downloads; robots.txt allows `/`.
 Honest project User-Agent. Full text stays local; only deliberate small test
 fixtures are committed.
+
+
+## Publication identity correction and recovery pass
+
+Population validation found that some uncited summaries cite earlier decisions
+in their reasoning. Citation extraction now accepts only a standalone citation
+line (or an explicit `Decision Citation:` line) in the first three pages, not
+an arbitrary citation in the body. Live variants include bracketed numbers
+(`[2018] SGPDPC [3]`) and reconsiderations (`SGPDPCR`). Reconsideration attachments
+do not inherit the original decision's penalty from the listing summary.
+
+PPLingo has two different full PDFs, published on 21 March and 23 May 2024,
+under the same `[2023] SGPDPC 12` citation. Each PDF therefore has a stable
+`:publication-<snapshot-sha256>` child URN, with its printed citation's URN
+stored in `meta.canonical_urn`. A bare identifier lookup returns an explicit
+`ambiguous_publication` when multiple texts exist. It never arbitrarily
+replaces one publication with another. `pdpc_decisions` filters by obligations,
+outcomes, penalty, sector and year; aggregates count distinct canonical
+identifiers and exclude unknown/conflicting penalties.
+
+Initial population fetch: **268/269 decision entries**, **21/118 undertakings**;
+98 failed hrefs remained pending. Citation coverage after correcting comparator
+misidentification: **205/269 (76.21%)** source decision entries. **0/271 fetched
+PDFs triggered the low-text OCR fallback**; many uncited publications are
+machine-readable summaries without a neutral citation. The earlier ?25% scans?
+assumption is not supported by this sample. OCR capability was separately
+verified with the rasterised-cover check above.
+
+PDPC's published `/sitemap.xml` supplies corrected undertaking URLs. The
+adapter now snapshots that sitemap and, after a listing href returns 404,
+tries only source-supplied candidates. It accepts one only if the detail page's
+exact normalised title and publication date match the listing. A recovery pass
+is running; updated counts will be recorded here. No URLs are invented and
+no source errors are counted as ingested decisions.

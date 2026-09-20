@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import date
 from typing import Any
 
+from .. import urn as urnlib
 from ..store import sqlite as store
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -190,7 +192,18 @@ def handle(conn: sqlite3.Connection, name: str, args: dict[str, Any]) -> dict[st
     if name == "get_document":
         document = store.get_document(conn, args["urn"])
         if document is None:
-            return {"error": "not_found", "urn": args["urn"]}
+            candidates = conn.execute(
+                "SELECT urn FROM documents WHERE json_extract(meta, '$.canonical_urn') = ?",
+                (args["urn"],),
+            ).fetchall()
+            if len(candidates) > 1:
+                return {"error": "ambiguous_publication", "urn": args["urn"],
+                        "publications": [row["urn"] for row in candidates],
+                        "message": "The source publishes multiple texts under this identifier; choose a publication URN."}
+            if candidates:
+                document = store.get_document(conn, candidates[0]["urn"])
+            if document is None:
+                return {"error": "not_found", "urn": args["urn"]}
         document["meta"] = json.loads(document["meta"])
         document["provenance"] = json.loads(document["provenance"])
         if args.get("parts", "none") == "none":
@@ -205,10 +218,12 @@ def handle(conn: sqlite3.Connection, name: str, args: dict[str, Any]) -> dict[st
             corpora.append(row)
         return {"corpora": corpora}
 
-    if name in ("get_provision", "list_amendments"):
-        return _unavailable(name, PHASE_3)
+    if name == "get_provision":
+        return _get_provision(conn, args)
+    if name == "list_amendments":
+        return _unavailable(name, PHASE_5)
     if name == "pdpc_decisions":
-        return _unavailable(name, PHASE_4)
+        return _pdpc_decisions(conn, args)
     if name in ("find_citing", "parliamentary_intent", "resolve_citation"):
         return _unavailable(name, PHASE_5)
 
@@ -218,3 +233,88 @@ def handle(conn: sqlite3.Connection, name: str, args: dict[str, Any]) -> dict[st
 def _source_url(conn: sqlite3.Connection, urn: str) -> str | None:
     row = conn.execute("SELECT provenance FROM documents WHERE urn = ?", (urn,)).fetchone()
     return json.loads(row["provenance"]).get("source_url") if row else None
+
+
+def _pdpc_decisions(conn: sqlite3.Connection, args: dict[str, Any]) -> dict[str, Any]:
+    clauses = ["corpus = 'pdpc'"]
+    params: list[Any] = []
+    for argument, field in (("obligation", "obligations"), ("outcome", "decision_types")):
+        values = args.get(argument)
+        if values:
+            clauses.append(f"EXISTS (SELECT 1 FROM json_each(meta, '$.{field}') "
+                           f"WHERE value IN ({','.join('?' for _ in values)}))")
+            params.extend(values)
+    for argument, operator in (("penalty_min", ">="), ("penalty_max", "<=")):
+        if argument in args:
+            clauses.append(f"json_extract(meta, '$.penalty_sgd') {operator} ?")
+            params.append(int(args[argument]))
+    if args.get("year_from") is not None:
+        clauses.append("issued >= ?")
+        params.append(f"{int(args['year_from']):04d}-01-01")
+    if args.get("sector"):
+        clauses.append("json_extract(meta, '$.sector') = ?")
+        params.append(args["sector"])
+    where = " AND ".join(clauses)
+    aggregate = conn.execute(
+        "WITH matched AS (SELECT COALESCE(json_extract(meta,'$.canonical_urn'), urn) AS identity, "
+        f"json_extract(meta,'$.penalty_sgd') AS penalty FROM documents WHERE {where}), "
+        "amounts AS (SELECT identity, CASE WHEN COUNT(DISTINCT penalty) <= 1 "
+        "AND COUNT(penalty) = COUNT(*) THEN MAX(penalty) ELSE NULL END AS penalty "
+        "FROM matched GROUP BY identity) "
+        "SELECT COUNT(*) AS count, SUM(penalty) AS total_penalty_sgd, "
+        "SUM(CASE WHEN penalty IS NULL THEN 1 ELSE 0 END) AS unknown_penalties, "
+        "(SELECT COUNT(*) FROM matched) AS publications FROM amounts", params,
+    ).fetchone()
+    rows = conn.execute(f"SELECT * FROM documents WHERE {where} ORDER BY issued DESC, urn LIMIT ?",
+                        [*params, max(1, min(int(args.get('limit', 50)), 100))]).fetchall()
+    decisions = []
+    for row in rows:
+        record = dict(row)
+        record["meta"] = json.loads(record["meta"])
+        record["provenance"] = json.loads(record["provenance"])
+        record["source_url"] = record["provenance"]["source_url"]
+        decisions.append(record)
+    return {"decisions": decisions, "aggregates": dict(aggregate),
+            "note": "Figures cover distinct indexed decision identifiers; publication variants are not double-counted. Unknown or conflicting penalties are excluded from the total."}
+
+
+def _get_provision(conn: sqlite3.Connection, args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        requested = urnlib.parse(args["urn"])
+        if requested.corpus not in ("act", "sl") or not requested.parts:
+            raise ValueError("get_provision requires a legislation provision URN")
+        as_of = date.fromisoformat(args["as_of"]) if args.get("as_of") else requested.as_of
+        if requested.as_of and as_of != requested.as_of:
+            raise ValueError("URN date and as_of disagree")
+    except ValueError as exc:
+        return {"error": "invalid_argument", "message": str(exc)}
+    canonical = str(requested.at(None))
+    rows = [dict(row) for row in conn.execute(
+        "SELECT * FROM documents WHERE urn = ? OR json_extract(meta, '$.canonical_urn') = ?",
+        (canonical, canonical),
+    ).fetchall()]
+    ranges = []
+    matches = []
+    target = (as_of or date.today()).isoformat()
+    for row in rows:
+        meta = json.loads(row["meta"])
+        start, end = row["in_force_from"], row["in_force_to"]
+        if meta.get("deleted") or meta.get("repealed") or meta.get("uncommenced") or not start:
+            continue
+        ranges.append({"from": start, "to": end, "urn": row["urn"]})
+        if start <= target and (end is None or target < end):
+            matches.append(row)
+    if not matches:
+        return {"error": "not_in_force", "urn": canonical, "as_of": target,
+                "available_ranges": sorted(ranges, key=lambda r: r["from"]),
+                "message": "No indexed version is in force on this date. Historical coverage may be incomplete; current text was not substituted."}
+    if len(matches) != 1:
+        return {"error": "ambiguous_version", "urn": canonical, "as_of": target,
+                "available_ranges": ranges}
+    row = matches[0]
+    row["meta"] = json.loads(row["meta"])
+    row["provenance"] = json.loads(row["provenance"])
+    row["source_url"] = row["provenance"]["source_url"]
+    row["as_of"] = target
+    row["validity_convention"] = "inclusive start, exclusive end"
+    return row

@@ -13,8 +13,10 @@ from pypdf.generic import DictionaryObject, NameObject, NumberObject, StreamObje
 
 from sgcorpus.adapters import pdpc
 from sgcorpus.config import Paths
+from sgcorpus.mcp.tools import handle
 from sgcorpus.net.cache import Snapshot, SnapshotStore
 from sgcorpus.pipeline import ingest, normalise
+from sgcorpus.store import sqlite
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 ITEM = json.loads((FIXTURES / 'pdpc_listing.json').read_text())['data'][0]
@@ -32,7 +34,8 @@ def test_live_cover_and_hydration_fixture(tmp_path: Path) -> None:
     snap = snapshot(tmp_path, (FIXTURES / 'pdpc_cover.pdf').read_bytes())
     doc, = pdpc.PdpcAdapter().parse(snap)
     assert doc.citation == '[2026] SGPDPC 1'
-    assert doc.urn == 'urn:sg:pdpc:2026_SGPDPC_1'
+    assert doc.urn.startswith('urn:sg:pdpc:2026_SGPDPC_1:publication-')
+    assert doc.meta['canonical_urn'] == 'urn:sg:pdpc:2026_SGPDPC_1'
     assert doc.meta['obligations'] == ['Protection', 'Accountability']
     assert doc.meta['penalty_sgd'] == 0
     assert doc.meta['no_penalty_reason'] == 'directions_only'
@@ -113,14 +116,15 @@ def test_discovery_resume_and_offline_normalise(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr('sgcorpus.net.client.Client._wait', lambda self: None)
     paths = Paths(tmp_path)
     respx.get('https://www.pdpc.gov.sg/robots.txt').mock(return_value=httpx.Response(200, text='User-agent: *\nAllow: /'))
+    respx.get(pdpc.SITEMAP_URL).mock(return_value=httpx.Response(200, text='<urlset></urlset>'))
     listing = respx.get(pdpc.API_URL).mock(side_effect=[
         httpx.Response(200, json={'totalItems': 1, 'data': [ITEM]}),
         httpx.Response(200, json={'totalItems': 0, 'data': []}),
     ])
     detail = respx.get(pdpc.BASE_URL + ITEM['href']).mock(return_value=httpx.Response(200, text=DETAIL))
     pdf = respx.get('https://www.pdpc.gov.sg/assets/dfce7ef8-17a3-4d27-9451-a665f6c16114').mock(return_value=httpx.Response(200, content=(FIXTURES / 'pdpc_cover.pdf').read_bytes()))
-    first = ingest.run('pdpc', paths, limit=1)
-    assert first['fetched'] == 1
+    first = ingest.run('pdpc', paths, limit=2)
+    assert first['fetched'] == 2
     second = ingest.run('pdpc', paths)
     assert second['failures'] == 0
     assert detail.call_count == pdf.call_count == 1
@@ -137,3 +141,41 @@ def test_missing_ocr_models_fails_before_engine_initialisation(monkeypatch: pyte
     monkeypatch.setenv('SGCORPUS_OCR_MODELS', str(tmp_path))
     with pytest.raises(RuntimeError, match='never downloads'):
         pdpc._ocr_engine()
+
+
+def test_body_citation_does_not_identify_uncited_summary(tmp_path: Path) -> None:
+    doc, = pdpc.PdpcAdapter().parse(snapshot(tmp_path, text_pdf(
+        'SUMMARY OF THE DECISION 1. We considered Jade E-Services [2018] SGPDPC 21.'
+    )))
+    assert doc.citation is None
+    assert doc.meta['citation_provisional'] is True
+
+
+@pytest.mark.parametrize(('raw', 'expected'), [
+    ('[2018] SGPDPC [3]', '[2018] SGPDPC 3'),
+    ('[2020] SGPDPCR 1', '[2020] SGPDPCR 1'),
+    ('[2026]SGPDPC1', '[2026] SGPDPC 1'),
+    ('Decision Citation: [2016] SGPDPC 20', '[2016] SGPDPC 20'),
+])
+def test_source_citation_variants(tmp_path: Path, raw: str, expected: str) -> None:
+    doc, = pdpc.PdpcAdapter().parse(snapshot(tmp_path, text_pdf(raw)))
+    assert doc.citation == expected
+
+
+def test_distinct_publications_survive_index_and_lookup(tmp_path: Path) -> None:
+    pdf = (FIXTURES / 'pdpc_cover.pdf').read_bytes()
+    first, = pdpc.PdpcAdapter().parse(snapshot(tmp_path, pdf))
+    second, = pdpc.PdpcAdapter().parse(snapshot(tmp_path, pdf + b'\n'))
+    conn = sqlite.connect(tmp_path / 'index.db')
+    sqlite.init(conn)
+    sqlite.insert_documents(conn, [first, second])
+    assert first.urn != second.urn
+    result = handle(conn, 'get_document', {'urn': 'urn:sg:pdpc:2026_SGPDPC_1'})
+    assert result['error'] == 'ambiguous_publication'
+    assert len(result['publications']) == 2
+    individual = handle(conn, 'get_document', {'urn': first.urn, 'parts': 'all'})
+    assert individual['text'] == first.text
+    hits = handle(conn, 'pdpc_decisions', {'obligation': ['Accountability'], 'penalty_max': 0})
+    assert len(hits['decisions']) == 2
+    assert all(d['source_url'] for d in hits['decisions'])
+    conn.close()

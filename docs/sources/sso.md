@@ -1,6 +1,6 @@
 # Source: Singapore Statutes Online
 
-**Authority:** AGC · **Corpus:** `act`, `sl` · **Adapter:** `sso` · **Status:** stub
+**Authority:** AGC · **Corpus:** `act`, `sl` · **Adapter:** `sso` · **Status:** implemented; gate verification in progress
 **Prototype:** [sgstatutescraper](https://github.com/kevanwee/sgstatutescraper)
 
 The hardest parse of the four and the most valuable output. This is the only source where point-in-time versioning is both available and essential.
@@ -74,4 +74,56 @@ Without an alias table covering both the chapter-number mapping and the provisio
 
 ## Rate limit and posture
 
-1 request / 2s, single connection. No redistribution of provision text — see [legal-posture.md](../legal-posture.md#singapore-statutes-online-agc). The publishable derivative is the structural and amendment skeleton.
+1 request / 6s, single connection. No redistribution of provision text — see [legal-posture.md](../legal-posture.md#singapore-statutes-online-agc). The publishable derivative is the structural and amendment skeleton.
+
+
+## Live verification, 19?20 September 2026
+
+Comma-separated `ProvIds` works. A request for `pr13-,pr14-,pr15-` returned
+all three provisions; repeated `ProvIds` parameters returned only the first.
+A full batch of **129/129 PDPA TOC anchors** returned bodies with no missing
+anchors (606,938 response bytes). `ProvIds=root-.` does not work. The adapter
+chunks long URLs, never text, and refuses a response missing any requested ID.
+
+Current browse pagination is a path component: page two is `/All/1`, not
+`PageIndex=2`. The title columns contain **500 + 25 = 525 unique current Acts**.
+The handoff's 501 on page one included an action link. Codes come solely from
+those title-column hrefs. The Companies Act is **CoA1967**, not CA1967 (Currency
+Act). `/Act/<code>/History` is a soft 404; legislative history is the `xv-`
+TOC entry within the document itself.
+
+The version popover supplies dated hrefs and the selected-version button
+supplies the actual version returned. Both are checked. Historical HTML that
+returns a different version is rejected. Version intervals use inclusive
+starts and exclusive ends at the next source-enumerated version. `--versions`
+fetches the enumerated history; no calendar dates or historical text are guessed.
+
+`--include-sl` adds the current SL listing; its hrefs contain an Act code and
+SL identifier (for example `AA2004-R5`) and often a `DocDate` query. The original
+href and query are retained. `--include-repealed` adds the published repealed
+Act listing (298 title rows observed). Repealed records remain stored and are
+not returned as current law. Parser fixtures cover the 2021 PDPA amendment.
+
+Source text is partitioned at TOC anchors, preserving long title, Parts,
+Divisions, provisions, schedules and legislative-history material. Numbered
+subsections and letter/roman paragraphs also have child records. Full section
+text is retained so a provision query does not require stitching partial text.
+Chapter references in legislative history are retained as **alias candidates**,
+not silently asserted mappings: references to other Acts can occur there.
+Phase 5 must resolve those candidates against the preserved source context.
+`dates.issued` currently records the selected source version date, explicitly
+labelled `issued_basis=source_version_date`; it is not represented as assent.
+
+Measured text checks: **30/30 current provisions** and **20/20 provision/date
+pairs** (ss 13?22, excluding 15A, on 31 January and 1 February 2021) match the
+live-fetched HTML after whitespace and curly-quote normalisation. The latter
+checks exercise `get_provision` through SQLite across the 2021 amendment.
+Source pages were fetched first; these are comparisons to source bytes, not
+fixture-only assertions. Current Act href coverage remains open until the
+serialized traversal and retry pass finish; initial pass: **394/525** with
+TOCs, **131/525** HTTP-200 responses without a TOC. Two sampled failures later
+returned proper statute pages and are being retried at the same six-second floor.
+
+No phase is marked complete here. Remaining limits include exhaustive SL and
+repealed-Act validation, resolving chapter/renumbering candidates, and checking
+uncommenced material independently of a consolidation's version date.

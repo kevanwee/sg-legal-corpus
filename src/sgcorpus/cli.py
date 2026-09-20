@@ -72,6 +72,9 @@ def fetch(
             "Roughly 8 extra requests per sitting."
         ),
     ] = False,
+    versions: Annotated[bool, typer.Option(help="sso: fetch all enumerated historical versions.")] = False,
+    include_sl: Annotated[bool, typer.Option(help="sso: include current subsidiary legislation.")] = False,
+    include_repealed: Annotated[bool, typer.Option(help="sso: include repealed Acts.")] = False,
     verbose: bool = False,
 ) -> None:
     """Fetch raw snapshots. The only command that touches the network."""
@@ -83,7 +86,8 @@ def fetch(
         until=date.fromisoformat(end) if end else None,
         limit=limit,
         min_interval=min_interval,
-        options={"vernacular": vernacular} if vernacular else None,
+        options={"vernacular": vernacular, "versions": versions,
+                 "include_sl": include_sl, "include_repealed": include_repealed},
     )
     console.print(result)
 
