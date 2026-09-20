@@ -1,6 +1,6 @@
 # Source: eLitigation
 
-**Authority:** Supreme Court / State Courts / Family Justice Courts · **Corpus:** `judgment` · **Adapter:** `elitigation` · **Status:** stub
+**Authority:** Supreme Court / State Courts / Family Justice Courts · **Corpus:** `judgment` · **Adapter:** `elitigation` · **Status:** implemented; live gate in progress
 **Prototype:** [elitiscraper](https://github.com/kevanwee/elitiscraper) (see also [crimewatch](https://github.com/kevanwee/crimewatch), [codeoflaw](https://github.com/kevanwee/codeoflaw))
 
 Written judgments from 2000 onwards. The highest-value corpus and the one with the tightest terms of use — read [legal-posture.md](../legal-posture.md#elitigation-supreme-court--judiciary) before any backfill.
@@ -62,3 +62,31 @@ The listing's own result count per (filter, year). A year ingested at 60% is a r
 ## Rate limit and posture
 
 1 request / 3s, single connection, daily cap enforced by the client. Judgment text stays local. The publishable derivative is the citator layer: neutral citation, court, date, coram, catchwords, parties, outcome, and the citation graph.
+
+## Live verification, 20 September 2026
+
+After scheduled maintenance ended, SUPCT's 2024 listing returned **529 judgments
+across 53 pages**. Discovery reconciled **529/529 distinct source hrefs**. The
+STATECT and FAMCT URLs above returned HTTP 200 system-error pages, with no result
+count. Those filter names remain prototype assumptions, not verified discovery
+routes. The adapter attempts them but leaves failures pending; it does not
+interpret them as zero judgments. No LawNet requests are made.
+
+The live judgment `[2024] SGHC 331` has `#divJudgement`, `.HN-NeutralCit`,
+`.HN-CaseName`, `.HN-Coram`, `.CaseNumber`, `.Judg-Lawyers`, and **202 printed
+`.Judg-1` paragraphs**. Inline footnote modals contain substantive text alongside
+UI headings/buttons. The parser retains footnote bodies and removes modal UI
+headers/footers. Full root text retains unnumbered material, quotations and
+tables; paragraph records use printed numbers and include continuation blocks.
+Duplicate printed numbers fail explicitly instead of overwriting a pincite.
+
+Counsel entries retain each source block, side and parenthesised firms. Coram
+source lines are retained alongside the parsed list. Outcome is explicitly
+unknown; it is not inferred from isolated words such as "dismissed". The source
+caption provides party strings, not inferred procedural roles.
+
+The committed fixtures are trimmed from the live listing and judgment (metadata,
+paragraphs 1 and 7, including a footnote). The full sampled-year corpus stays
+under ignored `data/`. Only this sampled year is being fetched; the gate for
+broader backfill has not been satisfied. Final ingestion and 20-judgment paragraph
+measurements will be recorded here before any phase-completion claim.
