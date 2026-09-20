@@ -156,6 +156,8 @@ def test_body_citation_does_not_identify_uncited_summary(tmp_path: Path) -> None
     ('[2020] SGPDPCR 1', '[2020] SGPDPCR 1'),
     ('[2026]SGPDPC1', '[2026] SGPDPC 1'),
     ('Decision Citation: [2016] SGPDPC 20', '[2016] SGPDPC 20'),
+    ('2025 SGPDPC 3', '[2025] SGPDPC 3'),
+    ('[2023 SGPDPCS 3]', '[2023] SGPDPCS 3'),
 ])
 def test_source_citation_variants(tmp_path: Path, raw: str, expected: str) -> None:
     doc, = pdpc.PdpcAdapter().parse(snapshot(tmp_path, text_pdf(raw)))

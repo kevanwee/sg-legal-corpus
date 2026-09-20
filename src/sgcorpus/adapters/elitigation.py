@@ -21,7 +21,7 @@ from .hansard import _clean
 BASE_URL = "https://www.elitigation.sg"
 LISTING = BASE_URL + "/gd/Home/Index?Filter={filter}&YearOfDecision={year}&SortBy=Score&CurrentPage={page}"
 FILTERS = {"SUPCT": Authority.SUPCT, "STATECT": Authority.STATECT, "FAMCT": Authority.FAMCT}
-COURTS = ("SGCA", "SGHC(A)", "SGHC", "SGHC(I)", "SGHCR", "SGDC", "SGMC", "SGFC")
+COURTS = ("SGCA", "SGCA(I)", "SGHC(A)", "SGHC", "SGHC(I)", "SGHCR", "SGHCF", "SGDC", "SGMC", "SGFC")
 
 
 def listing_items(body: str) -> tuple[int, int, list[dict[str, Any]]]:
@@ -60,9 +60,24 @@ def listing_items(body: str) -> tuple[int, int, list[dict[str, Any]]]:
 def _judgment(body: str) -> Tag:
     soup = BeautifulSoup(body, "lxml")
     root = soup.select_one("#divJudgement")
-    if root is None or root.select_one(".HN-NeutralCit") is None:
+    if root is None:
         raise ValueError("eLitigation judgment body/citation missing")
+    _citation(root)
     return root
+
+
+def _citation(root: Tag) -> str:
+    primary = root.select_one(".HN-NeutralCit")
+    if primary is not None:
+        return _clean(primary.get_text())
+    # Live cover-page variants use txt-body, CaseNumber or title, all centred.
+    # Require a standalone citation, never the first authority cited in reasons.
+    citations = {_clean(x.get_text()) for x in root.select("div.text-center")
+                 if "Judg-1" not in x.get_attribute_list("class")
+                 and urnlib.CITATION_RE.fullmatch(_clean(x.get_text()))}
+    if len(citations) != 1:
+        raise ValueError("eLitigation cover citation missing or ambiguous")
+    return citations.pop()
 
 
 def _text(root: Tag) -> str:
@@ -72,9 +87,57 @@ def _text(root: Tag) -> str:
         element.decompose()
     for br in copy.find_all("br"):
         br.replace_with("\n")
+    for cell in copy.find_all(["td", "th"]):
+        cell.append("\t")
     for block in copy.find_all(["div", "p", "tr", "table"]):
         block.append("\n")
     return "\n".join(_clean(line) for line in copy.get_text().splitlines() if _clean(line))
+
+
+def numbered_paragraphs(root: Tag) -> list[tuple[str, Tag]]:
+    """Recover the printed increasing sequence, excluding table/quoted labels.
+
+    Some quoted judgments reuse Judg-1 without a quotation wrapper. Select the
+    longest increasing sequence, preferring the publisher's number/em-space
+    delimiter only when lengths tie. An unresolved tie is an explicit failure.
+    All excluded text still belongs to the full judgment and continuation text.
+    """
+    candidates: list[tuple[str, Tag, tuple[int, str], int]] = []
+    paragraphs = root.select(".Judg-1")
+    if not any(re.match(r"^\d+[A-Za-z]?(?:\s|\.)", p.get_text().lstrip()) for p in paragraphs):
+        paragraphs = root.select(".txt-body.text-justify")
+    for paragraph in paragraphs:
+        if paragraph.find_parent(["table", "blockquote"]) is not None:
+            continue
+        raw = paragraph.get_text().lstrip()
+        match = re.match(r"^(\d+)([A-Za-z]?)(?:\s|\.)", raw)
+        if match:
+            label = match[1] + match[2]
+            candidates.append((label, paragraph, (int(match[1]), match[2]),
+                               int(raw.startswith((label + "\u2003", label + ".\u2003")))))
+    if not candidates:
+        return []
+    scores: list[tuple[int, int]] = []
+    paths: list[list[int]] = []
+    ambiguous: list[bool] = []
+    for i, (_, _, number, quality) in enumerate(candidates):
+        score, path, tied = (1, quality), [i], False
+        for j in range(i):
+            if candidates[j][2] >= number:
+                continue
+            option = (scores[j][0] + 1, scores[j][1] + quality)
+            if option > score:
+                score, path, tied = option, [*paths[j], i], ambiguous[j]
+            elif option == score:
+                tied = True
+        scores.append(score)
+        paths.append(path)
+        ambiguous.append(tied)
+    best = max(scores)
+    ends = [i for i, score in enumerate(scores) if score == best]
+    if len(ends) != 1 or ambiguous[ends[0]]:
+        raise ValueError("Ambiguous printed paragraph sequence: refusing to guess pincites")
+    return [(candidates[i][0], candidates[i][1]) for i in paths[ends[0]]]
 
 
 class ElitigationAdapter:
@@ -82,7 +145,7 @@ class ElitigationAdapter:
     corpus = Corpus.JUDGMENT
     authority = Authority.SUPCT
     adapter_version = "1.0.0"
-    parser_rev = 1
+    parser_rev = 6
     spec_doc = "docs/sources/elitigation.md"
 
     def __init__(self) -> None:
@@ -150,9 +213,7 @@ class ElitigationAdapter:
             listing_items(response.text)
         else:
             root = _judgment(response.text)
-            citation = root.select_one(".HN-NeutralCit")
-            assert citation is not None
-            if urnlib.from_neutral_citation(_clean(citation.get_text())) != urnlib.from_neutral_citation(params["item"]["citation"]):
+            if urnlib.from_neutral_citation(_citation(root)) != urnlib.from_neutral_citation(params["item"]["citation"]):
                 raise ValueError("Judgment citation differs from listing")
         yield str(response.url), response.content, response.status_code, params
 
@@ -161,13 +222,14 @@ class ElitigationAdapter:
             return
         root = _judgment(snapshot.text())
         def texts(selector: str) -> list[str]:
-            return [_clean(x.get_text(" ", strip=True)) for x in root.select(selector)]
-        citation = texts(".HN-NeutralCit")[0]
+            return [value for x in root.select(selector)
+                    if (value := _clean(x.get_text(" ", strip=True)))]
+        citation = _citation(root)
         urn = urnlib.from_neutral_citation(citation)
         match = urnlib.CITATION_RE.search(citation)
         assert match is not None
         court = match["court"]
-        authority = Authority.STATECT if court in ("SGDC", "SGMC") else Authority.FAMCT if court == "SGFC" else Authority.SUPCT
+        authority = Authority.STATECT if court in ("SGDC", "SGMC") else Authority.FAMCT if court in ("SGFC", "SGHCF") else Authority.SUPCT
         item = snapshot.params.get("item", {})
         if item.get("citation") and urnlib.from_neutral_citation(item["citation"]) != urn:
             raise ValueError("Judgment citation differs from saved listing")
@@ -175,7 +237,10 @@ class ElitigationAdapter:
             issued = date.fromisoformat(item["issued"])
         else:
             issued = datetime.strptime(texts(".Judg-Date-Reserved")[0], "%d %B %Y").date()
-        title = texts(".HN-CaseName")[0]
+        titles = texts(".HN-CaseName")
+        title = titles[0] if titles else item.get("title")
+        if not title:
+            raise ValueError("Judgment title absent from page and listing")
         coram = root.select_one(".HN-Coram")
         coram_lines = [_clean(x) for x in coram.get_text("\n").splitlines() if _clean(x)] if coram else []
         counsel = []
@@ -195,16 +260,17 @@ class ElitigationAdapter:
                                 snapshot_sha256=snapshot.sha256, adapter=self.name,
                                 adapter_version=self.adapter_version, parser_rev=self.parser_rev)
         children: list[Document] = []
-        numbers: set[str] = set()
-        for paragraph in root.select(".Judg-1"):
+        numbering_error = None
+        try:
+            numbered = numbered_paragraphs(root)
+        except ValueError as exc:
+            # A genuine source numbering error must not discard the judgment.
+            # Retain full text, withhold ambiguous pincites and report the gap.
+            numbered = []
+            numbering_error = str(exc)
+        numbered_ids = {id(tag) for _, tag in numbered}
+        for label, paragraph in numbered:
             body = _text(paragraph)
-            number = re.match(r"^(\d+[A-Za-z]?)(?:\s|\.)", body)
-            if not number:
-                continue  # Unnumbered material is retained in full in the root.
-            label = number[1]
-            if label in numbers:
-                raise ValueError(f"Duplicate printed paragraph {label}: cannot mint an unambiguous pincite")
-            numbers.add(label)
             # Continuation quotes, subparagraphs and tables belong to the preceding
             # printed paragraph; stop at the next top-level paragraph or heading.
             continuation = []
@@ -212,7 +278,7 @@ class ElitigationAdapter:
                 if not isinstance(sibling, Tag):
                     continue
                 classes = sibling.get_attribute_list("class")
-                if any(str(c) == "Judg-1" or str(c).startswith(("Judg-Heading", "Judg-Sign", "Judg-Lawyers", "Judg-EOF")) for c in classes):
+                if id(sibling) in numbered_ids or any(str(c).startswith(("Judg-Heading", "Judg-Sign", "Judg-Lawyers", "Judg-EOF")) for c in classes):
                     break
                 continuation.append(_text(sibling))
             body = "\n".join([body, *filter(None, continuation)])
@@ -226,6 +292,8 @@ class ElitigationAdapter:
             raise ValueError("Judgment body is empty")
         yield Document(urn=str(urn), corpus=self.corpus, authority=authority, title=title,
                        citation=citation, dates=Dates(issued=issued), text=full_text,
-                       parts=[c.urn for c in children], meta={**meta, "paragraph_count": len(children)},
+                       parts=[c.urn for c in children], meta={**meta, "paragraph_count": None if numbering_error else len(children),
+                           "paragraph_numbering_error": numbering_error,
+                           "paragraph_numbering_basis": "printed labels, increasing sequence with source delimiter tie-break"},
                        provenance=provenance)
         yield from children

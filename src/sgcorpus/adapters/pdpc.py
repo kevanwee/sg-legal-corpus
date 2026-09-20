@@ -36,7 +36,7 @@ SITEMAP_URL = BASE_URL + "/sitemap.xml"
 COLLECTIONS = ("Commission's Decisions", "Voluntary Undertakings")
 PAGE_SIZE = 100
 CITATION_RE = re.compile(
-    r"(?:Decision Citation:\s*)?\[(\d{4})\]\s*(SGPDPC[SR]?)\s*\[?(\d+)\]?"
+    r"(?:Decision Citation:\s*)?\[?(\d{4})\]?\s*(SGPDPC[SR]?)\s*\[?(\d+)\]?"
     r"(\s*\(NFA\))?", re.I,
 )
 PENALTY_CONTEXT_RE = re.compile(
@@ -202,7 +202,7 @@ class PdpcAdapter:
     corpus = Corpus.PDPC
     authority = Authority.PDPC
     adapter_version = "1.0.0"
-    parser_rev = 7
+    parser_rev = 8
     spec_doc = "docs/sources/pdpc.md"
 
     def __init__(self, *, snapshot_root: Path | None = None) -> None:
@@ -379,6 +379,7 @@ class PdpcAdapter:
                   "decision_types": types, "penalty_sgd": penalty, "penalty_stated": stated,
                   "no_penalty_reason": reason, "sector": None, "summary": summary,
                   "source_id": item["id"], "issued_basis": "listing_publication_date", "source_tags": tags, "has_full_text": kind == "pdf" or types == ["Undertaking"],
+                  "case_numbers": list(dict.fromkeys(re.findall(r"\bDP-\d{4}-\s*[A-Z]\d+\b", text))),
                   "ocr_pages": ocr_pages, "detail_sha256": snapshot.params.get("detail_sha256"),
                   "detail_url": snapshot.params.get("detail_url", snapshot.url)},
             provenance=Provenance(source_url=snapshot.url, retrieved_at=snapshot.retrieved_at,

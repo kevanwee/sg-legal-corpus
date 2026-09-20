@@ -50,24 +50,40 @@ def test_no_truncation_and_continuation_blocks(tmp_path: Path) -> None:
     quote.string = "quotation " * 4000 + "QUOTATION END"
     first.insert_after(quote)
     table = soup.new_tag("table")
-    table.append(BeautifulSoup("<tr><td>Cell A</td><td>Cell B</td></tr>", "lxml").tr)
+    table.append(BeautifulSoup('<tr><td>Cell A</td><td>Cell B</td><td><div class="Judg-1">1 June 2024</div></td></tr>', "lxml").tr)
     quote.insert_after(table)
     docs = list(ElitigationAdapter().parse(snapshot(tmp_path, str(soup).encode())))
     assert len(docs[1].text) > 32767
     assert "QUOTATION END" in docs[1].text and "Cell B" in docs[1].text
     assert "QUOTATION END" in docs[0].text
+    assert "Cell A Cell B" in docs[0].text
+    assert len(docs) == 3  # A table date is not paragraph 1 a second time.
 
 
-def test_duplicate_pincites_fail_loudly(tmp_path: Path) -> None:
+def test_ambiguous_pincites_preserve_text_and_report_gap(tmp_path: Path) -> None:
     body = (FIXTURES / "elitigation_judgment.html").read_text(encoding="utf-8")
     soup = BeautifulSoup(body, "lxml")
     root = soup.select_one("#divJudgement")
     assert root is not None
     duplicate = soup.new_tag("div", attrs={"class": "Judg-1"})
-    duplicate.string = "1 Second opinion paragraph"
+    duplicate.string = "7\u2003Second opinion paragraph"
     root.append(duplicate)
-    with pytest.raises(ValueError, match="Duplicate printed"):
-        list(ElitigationAdapter().parse(snapshot(tmp_path, str(soup).encode())))
+    root, = ElitigationAdapter().parse(snapshot(tmp_path, str(soup).encode()))
+    assert "Second opinion paragraph" in root.text
+    assert "Ambiguous printed" in root.meta["paragraph_numbering_error"]
+    assert root.parts == [] and root.meta["paragraph_count"] is None
+
+
+def test_quoted_numbers_remain_continuations(tmp_path: Path) -> None:
+    soup = BeautifulSoup((FIXTURES / "elitigation_judgment.html").read_bytes(), "lxml")
+    first = soup.select_one(".Judg-1")
+    assert first is not None
+    quote = soup.new_tag("div", attrs={"class": "Judg-1"})
+    quote.string = "32 A quoted judgment says this."
+    first.insert_after(quote)
+    docs = list(ElitigationAdapter().parse(snapshot(tmp_path, str(soup).encode())))
+    assert docs[0].parts == [docs[0].urn + ":para1", docs[0].urn + ":para7"]
+    assert "32 A quoted judgment" in docs[1].text
 
 
 def test_error_pages_are_not_empty_discovery(tmp_path: Path) -> None:
@@ -75,6 +91,19 @@ def test_error_pages_are_not_empty_discovery(tmp_path: Path) -> None:
         listing_items("<html>System error. Please try again later.</html>")
     with pytest.raises(ValueError, match="judgment body"):
         list(ElitigationAdapter().parse(snapshot(tmp_path, b"<html>System error</html>")))
+
+
+@pytest.mark.parametrize("css_class", ["txt-body", "CaseNumber", "title"])
+def test_cover_citation_variants_and_listing_title(tmp_path: Path, css_class: str) -> None:
+    soup = BeautifulSoup((FIXTURES / "elitigation_judgment.html").read_bytes(), "lxml")
+    citation = soup.select_one(".HN-NeutralCit")
+    assert citation is not None
+    citation["class"] = [css_class, "text-center"]
+    for title in soup.select(".HN-CaseName"):
+        title.decompose()
+    docs = list(ElitigationAdapter().parse(snapshot(tmp_path, str(soup).encode())))
+    assert docs[0].citation == "[2024] SGHC 331"
+    assert "Soh Jing Zhe" in docs[0].title
 
 
 def test_plan_reads_cached_listing_and_source_href(tmp_path: Path) -> None:
@@ -89,6 +118,19 @@ def test_plan_reads_cached_listing_and_source_href(tmp_path: Path) -> None:
     assert judgments[0].payload["item"]["href"] == "/gd/s/2024_SGHC_331"
     assert {w.payload["filter"] for w in work} == {"SUPCT", "STATECT", "FAMCT"}
     assert list(adapter.parse(next(SnapshotStore(tmp_path).iter_snapshots("elitigation")))) == []
+
+
+def test_live_family_layout_uses_printed_numbers(tmp_path: Path) -> None:
+    snap = SnapshotStore(tmp_path).put(adapter="elitigation", status=200,
+        url="https://www.elitigation.sg/gd/s/2024_SGFC_12",
+        body=(FIXTURES / "elitigation_family.html").read_bytes(),
+        params={"kind": "judgment", "item": {"citation": "[2024] SGFC 12", "title": "WUK v WUL", "issued": "2024-02-15"}})
+    docs = list(ElitigationAdapter().parse(snap))
+    assert len(docs) == 4
+    assert docs[0].meta["court"] == "SGFC"
+    assert docs[0].authority.value == "FAMCT"
+    assert docs[1].urn.endswith(":para1")
+    assert docs[-1].urn.endswith(":para3")
 
 
 @respx.mock
